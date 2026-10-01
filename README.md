@@ -6,6 +6,110 @@ screen, naps when you're away, can be dragged and thrown, chats through a local 
 
 Built with Godot 4.7 (GDScript). Runs on Linux, Windows and macOS.
 
+## Setup
+
+### Linux
+
+1. **Install Godot 4.7** (the standard build, not .NET). Download it from
+   [godotengine.org/download](https://godotengine.org/download), unzip it, and put the
+   binary on your PATH as `godot`:
+
+   ```sh
+   mkdir -p ~/.local/bin
+   mv ~/Downloads/Godot_v4.7*_linux.x86_64 ~/.local/bin/godot
+   chmod +x ~/.local/bin/godot
+   godot --version            # should print 4.7.x
+   ```
+
+   If `godot --version` says "command not found", add `~/.local/bin` to your PATH
+   (`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`, then open a new terminal).
+
+2. **Download Anicon:**
+
+   ```sh
+   git clone https://github.com/SRISARATHIS/Anicon.git
+   cd Anicon
+   ```
+
+3. **Import the sprites** (once, and again after pulling new art). This takes a few seconds:
+
+   ```sh
+   godot --headless --path . --import
+   ```
+
+4. **Install the `anicon` command:**
+
+   ```sh
+   ln -s "$PWD/bin/anicon" ~/.local/bin/anicon
+   ```
+
+5. **Optional: set up chat.** Install [Ollama](https://ollama.com). You can skip this
+   step; everything except chat and the clipboard summary works without it.
+
+   ```sh
+   curl -fsSL https://ollama.com/install.sh | sh   # or: sudo dnf install ollama
+   ```
+
+   You don't need to download a model yourself: `anicon start` pulls `llama3.2:3b`
+   (about 2 GB) in the background the first time.
+
+6. **GNOME on Wayland only:** let the knight see your cursor and other windows (needed
+   for chasing clicks, guard instinct and climbing windows):
+
+   ```sh
+   anicon setup
+   ```
+
+   Then **log out and back in** once. Skip this on X11, KDE and other desktops.
+   Not sure which you have? Run `echo $XDG_SESSION_TYPE $XDG_CURRENT_DESKTOP`.
+
+7. **Start it:**
+
+   ```sh
+   anicon start
+   ```
+
+   The knight drops onto the bottom of your screen. `anicon status` checks that
+   everything is running, and `anicon log` shows what went wrong if it doesn't appear.
+
+### macOS
+
+1. Install Godot 4.7 from [godotengine.org/download](https://godotengine.org/download)
+   and drag `Godot.app` into Applications.
+2. Download and import:
+
+   ```sh
+   git clone https://github.com/SRISARATHIS/Anicon.git
+   cd Anicon
+   export ANICON_GODOT=/Applications/Godot.app/Contents/MacOS/Godot
+   "$ANICON_GODOT" --headless --path . --import
+   ```
+
+   Add the `export ANICON_GODOT=...` line to `~/.zshrc` so it's set in new terminals.
+3. Install the command: `mkdir -p ~/.local/bin && ln -s "$PWD/bin/anicon" ~/.local/bin/anicon`
+   (make sure `~/.local/bin` is on your PATH).
+4. Optional chat: install Ollama from [ollama.com/download](https://ollama.com/download).
+5. Start it: `anicon start`. The first time, macOS may ask for permission to allow
+   Godot to run; allow it in System Settings → Privacy & Security.
+
+### Windows
+
+The `anicon` command is Linux/macOS only; on Windows you run Godot directly.
+
+1. Install Godot 4.7 from [godotengine.org/download](https://godotengine.org/download)
+   and unzip it, for example to `C:\Godot\godot.exe`.
+2. Install [Git](https://git-scm.com/download/win), then in PowerShell:
+
+   ```powershell
+   git clone https://github.com/SRISARATHIS/Anicon.git
+   cd Anicon
+   C:\Godot\godot.exe --headless --path . --import
+   ```
+
+3. Optional chat: install Ollama from [ollama.com/download](https://ollama.com/download),
+   then run `ollama pull llama3.2:3b` once.
+4. Start it: `C:\Godot\godot.exe --path .` (close it from the knight's right-click menu → Quit).
+
 ## Turn it on and off
 
 ```sh
@@ -20,17 +124,11 @@ anicon setup     # GNOME only, once: lets the knight see your cursor and clicks
 
 `anicon start` also starts Ollama if it's installed but not running (and downloads the
 chat model in the background if it's missing), and `anicon stop` shuts down only an
-Ollama it started. `bin/anicon` works on Linux and macOS. Put it on your PATH with
-`ln -s "$PWD/bin/anicon" ~/.local/bin/anicon`. It runs the exported build from `build/`
-if there is one, otherwise the project through Godot (`ANICON_GODOT` picks the binary).
-You can also run it in the foreground with `godot --path .`.
+Ollama it started. It runs the exported build from `build/` if there is one, otherwise
+the project through Godot (`ANICON_GODOT` picks the binary). You can also run it in the
+foreground with `godot --path .`.
 
-For chat, install [Ollama](https://ollama.com) and pull the default model:
-
-```sh
-curl -fsSL https://ollama.com/install.sh | sh   # or: sudo dnf install ollama
-ollama pull llama3.2:3b
-```
+To update later: `anicon stop`, `git pull`, `godot --headless --path . --import`, `anicon start`.
 
 ## Using the knight
 
