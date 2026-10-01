@@ -1,0 +1,7 @@
+{
+  "uuid": "anicon@anicon.local",
+  "name": "Anicon pointer bridge",
+  "description": "Tells the Anicon desktop knight where the mouse is and when you click. On Wayland, X11 apps like Anicon can't see this on their own. Only sends to 127.0.0.1.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}

@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# Turn Anicon on and off from the terminal (Linux and macOS).
+#
+#   anicon start     start the knight in the background
+#   anicon stop      send it home
+#   anicon restart   stop, then start
+#   anicon toggle    start if stopped, stop if running
+#   anicon status    say whether it's running (exit code 0 = running, 3 = stopped)
+#   anicon log       show the last lines of its log
+#   anicon setup     install the GNOME extension that lets the knight see your cursor
+#                    and clicks on Wayland (log out and back in once afterwards)
+#
+# It runs the exported build in build/ if there is one, otherwise the project through
+# Godot (set ANICON_GODOT to pick a specific Godot binary). If Ollama is installed but
+# not running, `start` launches it for chat, and `stop` shuts down only that instance.
+# If the chat model (from Anicon's settings) isn't downloaded yet, `start` pulls it in
+# the background.
+set -euo pipefail
+
+ANICON_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/anicon"
+PID_FILE="$STATE_DIR/anicon.pid"
+LOG_FILE="$STATE_DIR/anicon.log"
+OLLAMA_PID_FILE="$STATE_DIR/ollama.pid"
+EXTENSION_UUID="anicon@anicon.local"
+SETTINGS_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/godot/app_userdata/Anicon/settings.cfg"
+DEFAULT_MODEL="llama3.2:3b"
+
+command_line() {
+	local exported="$ANICON_DIR/build/linux/anicon.x86_64"
+	if [[ "$(uname)" == "Linux" && -x "$exported" ]]; then
+		CMD=("$exported")
+		return
+	fi
+	local godot="${ANICON_GODOT:-}"
+	if [[ -z "$godot" ]]; then
+		for candidate in godot godot4 "$HOME/.local/bin/godot"; do
+			if command -v "$candidate" >/dev/null 2>&1; then
+				godot="$(command -v "$candidate")"
+				break
+			fi
+		done
+	fi
+	if [[ -z "$godot" ]]; then
+		echo "Can't find Godot. Install it or set ANICON_GODOT=/path/to/godot." >&2
+		exit 1
+	fi
+	CMD=("$godot" --path "$ANICON_DIR")
+}
+
+running_pid() {
+	[[ -f "$PID_FILE" ]] || return 1
+	local pid
+	pid="$(cat "$PID_FILE")"
+	kill -0 "$pid" 2>/dev/null || return 1
+	# Make sure the pid wasn't reused by some other program.
+	ps -p "$pid" -o args= 2>/dev/null | grep -qF -- "$ANICON_DIR" || return 1
+	echo "$pid"
+}
+
+ollama_up() {
+	curl -s -m 2 http://localhost:11434/api/version >/dev/null 2>&1
+}
+
+# The model chosen in Anicon's settings, or the default.
+chat_model() {
+	local model=""
+	if [[ -f "$SETTINGS_FILE" ]]; then
+		model="$(sed -n 's/^ollama_model *= *"\(.*\)"$/\1/p' "$SETTINGS_FILE" | head -n 1)"
+	fi
+	echo "${model:-$DEFAULT_MODEL}"
+}
+
+# Downloads the chat model in the background if Ollama doesn't have it yet.
+pull_model() {
+	local model
+	model="$(chat_model)"
+	for _ in $(seq 50); do
+		ollama_up && break
+		sleep 0.2
+	done
+	ollama_up || return 0
+	local name="$model"
+	[[ "$name" == *:* ]] || name="$name:latest"
+	if curl -s -m 5 http://localhost:11434/api/tags | grep -qF "\"name\":\"$name\""; then
+		return 0
+	fi
+	if pgrep -f "ollama pull $model" >/dev/null 2>&1; then
+		echo "Still downloading the chat model $model."
+		return 0
+	fi
+	nohup ollama pull "$model" >"$STATE_DIR/ollama-pull.log" 2>&1 &
+	disown
+	echo "Downloading the chat model $model in the background (progress: $STATE_DIR/ollama-pull.log)."
+}
+
+start_ollama() {
+	if ! command -v ollama >/dev/null 2>&1; then
+		echo "Ollama isn't installed, so chat won't work yet (see the README)."
+		return 0
+	fi
+	if ! ollama_up; then
+		nohup ollama serve >"$STATE_DIR/ollama.log" 2>&1 &
+		echo $! >"$OLLAMA_PID_FILE"
+		disown
+		echo "Started Ollama for chat."
+	fi
+	pull_model
+}
+
+stop_ollama() {
+	[[ -f "$OLLAMA_PID_FILE" ]] || return 0
+	local pid
+	pid="$(cat "$OLLAMA_PID_FILE")"
+	if kill -0 "$pid" 2>/dev/null && ps -p "$pid" -o args= | grep -q "ollama serve"; then
+		kill "$pid"
+		echo "Stopped the Ollama we started."
+	fi
+	rm -f "$OLLAMA_PID_FILE"
+}
+
+start() {
+	local pid
+	if pid="$(running_pid)"; then
+		echo "Anicon is already running (pid $pid)."
+		return 0
+	fi
+	command_line
+	mkdir -p "$STATE_DIR"
+	start_ollama
+	nohup "${CMD[@]}" >"$LOG_FILE" 2>&1 &
+	echo $! >"$PID_FILE"
+	disown
+	sleep 1
+	if pid="$(running_pid)"; then
+		echo "Anicon is on (pid $pid)."
+	else
+		echo "Anicon didn't start. Last lines of $LOG_FILE:" >&2
+		tail -n 20 "$LOG_FILE" >&2
+		rm -f "$PID_FILE"
+		return 1
+	fi
+}
+
+stop() {
+	local pid
+	if ! pid="$(running_pid)"; then
+		rm -f "$PID_FILE"
+		stop_ollama
+		echo "Anicon is not running."
+		return 0
+	fi
+	kill "$pid"
+	for _ in $(seq 50); do
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 0.1
+	done
+	if kill -0 "$pid" 2>/dev/null; then
+		kill -9 "$pid"
+	fi
+	rm -f "$PID_FILE"
+	stop_ollama
+	echo "Anicon is off."
+}
+
+status() {
+	local pid running=0
+	if pid="$(running_pid)"; then
+		echo "Anicon is running (pid $pid)."
+	else
+		echo "Anicon is not running."
+		running=3
+	fi
+	if ollama_up; then
+		echo "Chat: Ollama is up."
+	elif command -v ollama >/dev/null 2>&1; then
+		echo "Chat: Ollama is installed but not running."
+	else
+		echo "Chat: Ollama isn't installed."
+	fi
+	if [[ "${XDG_SESSION_TYPE:-}" == "wayland" && "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]]; then
+		local state
+		state="$(gnome-extensions info "$EXTENSION_UUID" 2>/dev/null | sed -n 's/^ *State: *//p' || true)"
+		if [[ -z "$state" && -e "${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/$EXTENSION_UUID" ]]; then
+			state="installed, loads after you log out and back in"
+		fi
+		echo "Cursor extension: ${state:-not installed (run: anicon setup)}"
+	fi
+	return $running
+}
+
+setup() {
+	if [[ "${XDG_CURRENT_DESKTOP:-}" != *GNOME* ]]; then
+		echo "Not on GNOME, so there's nothing to set up: Anicon can see the cursor on its own here."
+		return 0
+	fi
+	local source="$ANICON_DIR/extras/gnome-extension/$EXTENSION_UUID"
+	local target="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/$EXTENSION_UUID"
+	mkdir -p "$(dirname "$target")"
+	rm -rf "$target"
+	ln -s "$source" "$target"
+	if gnome-extensions enable "$EXTENSION_UUID" 2>/dev/null; then
+		echo "Cursor extension installed and enabled."
+		return 0
+	fi
+	# GNOME on Wayland only discovers new extensions at login, so pre-enable it for then.
+	local enabled
+	enabled="$(gsettings get org.gnome.shell enabled-extensions)"
+	if [[ "$enabled" != *"'$EXTENSION_UUID'"* ]]; then
+		if [[ "$enabled" == "@as []" || "$enabled" == "[]" ]]; then
+			enabled="['$EXTENSION_UUID']"
+		else
+			enabled="${enabled%]}, '$EXTENSION_UUID']"
+		fi
+		gsettings set org.gnome.shell enabled-extensions "$enabled"
+	fi
+	echo "Cursor extension installed. Log out and back in once so GNOME loads it."
+}
+
+case "${1:-}" in
+	start) start ;;
+	stop) stop ;;
+	restart) stop; start ;;
+	toggle) if running_pid >/dev/null; then stop; else start; fi ;;
+	status) status ;;
+	log) tail -n "${2:-40}" "$LOG_FILE" 2>/dev/null || echo "No log yet." ;;
+	setup) setup ;;
+	*)
+		echo "Usage: anicon {start|stop|restart|toggle|status|log|setup}" >&2
+		exit 2
+		;;
+esac
